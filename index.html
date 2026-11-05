@@ -106,6 +106,31 @@ a { color: var(--accent); }
 .tip .m { color: var(--fg-2); }
 .map-status { position:absolute; bottom: 10px; right: 10px; font-size: 11px; color: var(--fg-3); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 3px 7px; }
 
+/* ---------- table view ---------- */
+.tablewrap { position:absolute; inset:0; background: var(--panel); display:flex; flex-direction:column; z-index: 2; }
+.tablebar { display:flex; flex-wrap:wrap; gap: 6px 14px; align-items:center; padding: 8px 12px; padding-left: max(12px, env(safe-area-inset-left, 0px)); border-bottom: 1px solid var(--line); font-size: 12px; color: var(--fg-2); }
+.tablebar .pg { display:inline-flex; gap: 4px; align-items:center; margin-left:auto; }
+.tablebar .pg button { background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 3px 8px; font-size: 12px; color: var(--fg-2); }
+.tablebar .pg button:disabled { opacity: .4; cursor: default; }
+.tablebar select { background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 2px 6px; font-size: 12px; }
+.tablescroll { flex: 1 1 auto; overflow: auto; min-height: 0; }
+.dt { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.dt th, .dt td { padding: 5px 8px; text-align: left; border-bottom: 1px solid var(--line-soft); white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; vertical-align: top; }
+.dt th { position: sticky; top: 0; background: var(--panel); color: var(--fg-3); font-weight: 600; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; cursor: pointer; user-select: none; z-index: 1; box-shadow: inset 0 -1px 0 var(--line); }
+.dt th:hover { color: var(--fg); }
+.dt th.sorted { color: var(--accent); }
+.dt th .arrow { font-size: 10px; margin-left: 3px; }
+.dt tbody tr { cursor: pointer; }
+.dt tbody tr:hover { background: var(--bg); }
+.dt tbody tr.sel { background: var(--accent-soft); }
+.dt td.r { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.dt td.name { font-weight: 500; max-width: 320px; }
+.dt td .dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:6px; vertical-align: 0; }
+.dt td.lnk a { margin-right: 6px; }
+.dt td.lnk { max-width: 420px; }
+.dt td.lnk .more { color: var(--fg-3); }
+.dt td.muted { color: var(--fg-3); }
+
 /* ---------- stats rail ---------- */
 .rail { position: relative; border-left: 1px solid var(--line); background: var(--panel); overflow: hidden; min-width: 0; }
 .stats { height: 100%; overflow-y: auto; padding: 12px 14px 24px; padding-right: max(14px, env(safe-area-inset-right, 0px)); display: grid; gap: 18px; align-content: start; }
@@ -196,6 +221,10 @@ a { color: var(--accent); }
       <button id="cb-family" aria-pressed="false">type group</button>
     </span>
     <label class="chk"><input type="checkbox" id="shade" checked> Shade countries by count</label>
+    <span class="seg" role="group" aria-label="View">
+      <button id="v-map" aria-pressed="true">Map</button>
+      <button id="v-table" aria-pressed="false">Table</button>
+    </span>
   </div>
   <div class="active-filters" id="active"></div>
 </header>
@@ -212,6 +241,10 @@ a { color: var(--accent); }
     <div class="legend" id="legend"></div>
     <div class="map-status" id="mapstatus">loading basemap…</div>
     <div class="tip" id="tip" hidden></div>
+    <div class="tablewrap" id="tablewrap" hidden>
+      <div class="tablebar" id="tablebar"></div>
+      <div class="tablescroll"><table class="dt" id="dt"></table></div>
+    </div>
   </div>
   <aside class="rail">
     <div class="stats" id="stats"></div>
@@ -282,8 +315,81 @@ a { color: var(--accent); }
   }
   function applyFilters() {
     filtered = rows.filter(matches);
-    renderActive(); renderStats(); renderLegend(); renderNote(); buildIndex(); draw();
+    tbl.page = 0;
+    renderActive(); renderStats(); renderLegend(); renderNote(); buildIndex(); draw(); renderTable();
   }
+
+  // ---------- table view ----------
+  const tbl = { on: false, sortKey: 'name', dir: 1, page: 0, size: 100 };
+  const hostOf = u => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch (e) { return u; } };
+  const refDb = s => { const f = s[2] || ''; if (/Chemicals/i.test(f)) return 'GEM chemicals'; if (/Iron.and.Steel|steel/i.test(f)) return 'GEM steel'; if (/IEA/i.test(f) || /^IEA/i.test(s[1] || '')) return 'IEA'; if (/India/i.test(f)) return 'India list'; return 'reference'; };
+  const tcols = [
+    { k: 'id', l: 'ID', g: r => r[C.id], cls: 'muted' },
+    { k: 'name', l: 'Name', g: r => r[C.name] || '', cls: 'name' },
+    { k: 'role', l: 'Role', g: r => r[C.role] >= 0 ? D.roles[r[C.role]] : '', dot: r => roleSlot[D.roles[r[C.role]]] },
+    { k: 'type', l: 'Type', g: r => r[C.type] >= 0 ? D.types[r[C.type]] : '' },
+    { k: 'status', l: 'Status', g: r => D.statuses[r[C.status]] || '', dot: r => statusSlot[statusGroup[D.statuses[r[C.status]]]] },
+    { k: 'country', l: 'Country', g: r => r[C.country] >= 0 ? countryName(D.countries[r[C.country]]) : '' },
+    { k: 'city', l: 'City / region', g: r => [r[C.city], r[C.region]].filter(Boolean).join(', ') },
+    { k: 'operator', l: 'Operator', g: r => r[C.operator] || '' },
+    { k: 'prec', l: 'Location', g: r => r[C.prec] >= 0 ? D.precs[r[C.prec]] : '', cls: 'muted' },
+    { k: 'capstr', l: 'Capacity', g: r => r[C.capstr] || '' },
+    { k: 'mw', l: 'MW', g: r => r[C.mw], num: true, f: v => fmt1(v) },
+    { k: 'h2t', l: 'H₂ t/yr', g: r => r[C.h2t], num: true, f: v => fmt(Math.round(v)) },
+    { k: 'year', l: 'Start', g: r => r[C.year], num: true, f: v => v },
+    { k: 'disc', l: 'Found by', g: r => r[C.disc] >= 0 ? D.discs[r[C.disc]] : '', cls: 'muted' },
+    { k: 'nsrc', l: 'Sources', g: r => r[C.nsrc], num: true, f: v => v },
+    { k: 'links', l: 'Source links (click to open)', g: r => r[C.nsrc], links: true },
+  ];
+  function sortedRows() {
+    const c = tcols.find(x => x.k === tbl.sortKey) || tcols[1]; const d = tbl.dir;
+    const arr = filtered.slice();
+    if (c.num) arr.sort((a, b) => { const x = c.g(a), y = c.g(b); if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return (x - y) * d; });
+    else arr.sort((a, b) => { const x = c.g(a), y = c.g(b); if (!x && !y) return 0; if (!x) return 1; if (!y) return -1; return x.localeCompare(y) * d; });
+    return arr;
+  }
+  function linksCell(r) {
+    const srcs = D.sources[r[C.id]] || []; const parts = []; let shown = 0;
+    for (const s of srcs) {
+      if (shown >= 3) break;
+      const u = s[2] || ''; const isUrl = /^https?:\/\//i.test(u);
+      if (isUrl) parts.push(`<a href="${esc(u)}" target="_blank" rel="noopener" title="${esc(u)}">${esc(hostOf(u))} ↗</a>`);
+      else parts.push(`<span class="muted" title="${esc(u)}">${esc(refDb(s))}</span>`);
+      shown++;
+    }
+    if (srcs.length > shown) parts.push(`<span class="more">+${srcs.length - shown} more</span>`);
+    return parts.join(' ') || '<span class="muted">—</span>';
+  }
+  function renderTable() {
+    if (!tbl.on) return;
+    const arr = sortedRows(); const T = arr.length; const pages = Math.max(1, Math.ceil(T / tbl.size));
+    tbl.page = Math.min(tbl.page, pages - 1);
+    const start = tbl.page * tbl.size, slice = arr.slice(start, start + tbl.size);
+    document.getElementById('tablebar').innerHTML = `<span><b class="num">${fmt(T)}</b> facilities in the current selection · rows ${fmt(start + 1)}–${fmt(Math.min(T, start + tbl.size))} · click a row for details and all sources</span>
+      <span class="pg"><label>Rows <select id="tsize">${[50, 100, 250, 500].map(n => `<option value="${n}"${n === tbl.size ? ' selected' : ''}>${n}</option>`).join('')}</select></label>
+      <button id="tprev"${tbl.page === 0 ? ' disabled' : ''}>‹ Prev</button><span class="num">${tbl.page + 1} / ${pages}</span><button id="tnext"${tbl.page >= pages - 1 ? ' disabled' : ''}>Next ›</button></span>`;
+    const head = '<thead><tr>' + tcols.map(c => `<th data-k="${c.k}" class="${c.k === tbl.sortKey ? 'sorted' : ''}${c.num ? ' r' : ''}">${c.l}${c.k === tbl.sortKey ? `<span class="arrow">${tbl.dir > 0 ? '▲' : '▼'}</span>` : ''}</th>`).join('') + '</tr></thead>';
+    const body = '<tbody>' + slice.map(r => `<tr data-id="${r[C.id]}"${state.selected === r[C.id] ? ' class="sel"' : ''}>` + tcols.map(c => {
+      if (c.links) return `<td class="lnk">${linksCell(r)}</td>`;
+      const v = c.g(r);
+      if (c.num) return `<td class="r">${v == null ? '' : c.f(v)}</td>`;
+      return `<td class="${c.cls || ''}" title="${esc(v)}">${c.dot && v ? `<span class="dot" style="background:${col(c.dot(r))}"></span>` : ''}${esc(v)}</td>`;
+    }).join('') + '</tr>').join('') + '</tbody>';
+    const t = document.getElementById('dt'); t.innerHTML = head + body;
+    t.querySelectorAll('th').forEach(th => th.addEventListener('click', () => { const k = th.dataset.k; if (tbl.sortKey === k) tbl.dir = -tbl.dir; else { tbl.sortKey = k; tbl.dir = 1; } renderTable(); }));
+    t.querySelectorAll('tbody tr').forEach(tr => tr.addEventListener('click', e => { if (e.target.closest('a')) return; const r = rows.find(x => x[C.id] === tr.dataset.id); if (r) { openDetail(r); t.querySelectorAll('tr.sel').forEach(x => x.classList.remove('sel')); tr.classList.add('sel'); } }));
+    document.getElementById('tsize').addEventListener('change', e => { tbl.size = +e.target.value; tbl.page = 0; renderTable(); });
+    document.getElementById('tprev').addEventListener('click', () => { tbl.page--; renderTable(); document.querySelector('.tablescroll').scrollTop = 0; });
+    document.getElementById('tnext').addEventListener('click', () => { tbl.page++; renderTable(); document.querySelector('.tablescroll').scrollTop = 0; });
+  }
+  function setView(v) {
+    tbl.on = v === 'table';
+    document.getElementById('tablewrap').hidden = !tbl.on;
+    document.getElementById('v-map').setAttribute('aria-pressed', !tbl.on); document.getElementById('v-table').setAttribute('aria-pressed', tbl.on);
+    if (tbl.on) renderTable();
+  }
+  document.getElementById('v-map').addEventListener('click', () => setView('map'));
+  document.getElementById('v-table').addEventListener('click', () => setView('table'));
 
   function fillSelect(id, list, labelFn) {
     const sel = document.getElementById(id);
