@@ -161,7 +161,7 @@ a { color: var(--accent); }
 .chart h3 { margin: 0 0 6px; font: 600 12px var(--font-body); letter-spacing: .05em; text-transform: uppercase; color: var(--fg-3); display:flex; justify-content: space-between; align-items: baseline; }
 .chart h3 span { font-weight: 400; letter-spacing: 0; text-transform: none; }
 .bars { display:grid; gap: 3px; }
-.bar { display:grid; grid-template-columns: 118px minmax(0,1fr) 48px; align-items:center; gap: 8px; padding: 1px 4px; border-radius: 4px; background: transparent; border: 0; text-align:left; width: 100%; color: var(--fg); }
+.bar { display:grid; grid-template-columns: 150px minmax(0,1fr) 48px; align-items:center; gap: 8px; padding: 1px 4px; border-radius: 4px; background: transparent; border: 0; text-align:left; width: 100%; color: var(--fg); }
 .bar:hover { background: var(--bg); }
 .bar .l { font-size: 12px; white-space: nowrap; overflow:hidden; text-overflow: ellipsis; color: var(--fg-2); }
 .bar .t { display:block; height: 10px; background: var(--line-soft); border-radius: 2px; overflow: hidden; }
@@ -232,6 +232,7 @@ a { color: var(--accent); }
     <label>Country <select id="f-country"></select></label>
     <label>Found by <select id="f-disc"></select></label>
     <label>Location <select id="f-prec"></select></label>
+    <label>Fields <select id="f-cmp"></select></label>
     <button class="btn" id="clear">Clear filters</button>
     <span class="seg" role="group" aria-label="Color points by">
       <button id="cb-role" aria-pressed="true">Color: role</button>
@@ -305,8 +306,27 @@ function boot(D) {
   };
 
   // ---------- state ----------
-  const state = { q: '', role: null, type: null, status: null, country: null, disc: null, prec: null, colorBy: 'role', shade: true, selected: null, year: null, incAgg: false };
+  const state = { q: '', role: null, type: null, status: null, country: null, disc: null, prec: null, colorBy: 'role', shade: true, selected: null, year: null, incAgg: false, cmp: null };
   const isAgg = r => /aggregate row/i.test(r[C.flags] || '');
+  const fieldTests = [
+    ['role', 'Hydrogen role', r => r[C.role] >= 0],
+    ['type', 'Facility type (not “other”)', r => r[C.type] >= 0 && D.types[r[C.type]] !== 'other'],
+    ['operator', 'Operator', r => !!r[C.operator]],
+    ['country', 'Country', r => r[C.country] >= 0],
+    ['coords', 'Coordinates', r => r[C.lat] != null],
+    ['status', 'Status known', r => D.statuses[r[C.status]] !== 'unknown'],
+    ['year', 'Start year', r => r[C.year] != null],
+    ['capacity', 'Capacity (t/yr or MW)', r => r[C.h2t] != null || r[C.mw] != null],
+  ];
+  const fieldTest = Object.fromEntries(fieldTests.map(f => [f[0], f[2]]));
+  const cmpOptions = [['all8', 'Complete: all 8 key fields'], ['core7', 'Core fields (all but start year)'], ...fieldTests.map(f => ['has:' + f[0], 'Has ' + f[1].toLowerCase()])];
+  const cmpLabel = Object.fromEntries(cmpOptions);
+  function cmpMatch(r, key) {
+    if (key === 'all8') return fieldTests.every(f => f[2](r));
+    if (key === 'core7') return fieldTests.every(f => f[0] === 'year' || f[2](r));
+    if (key.startsWith('has:')) return fieldTest[key.slice(4)](r);
+    return true;
+  }
   let filtered = rows, cssVars = {};
 
   function readVars() {
@@ -324,6 +344,7 @@ function boot(D) {
     if (state.disc !== null && r[C.disc] !== state.disc) return false;
     if (state.prec !== null && r[C.prec] !== state.prec) return false;
     if (state.year !== null && yearBin(r[C.year]) !== state.year) return false;
+    if (state.cmp !== null && !cmpMatch(r, state.cmp)) return false;
     if (state.q) {
       const q = state.q;
       const hay = ((r[C.name] || '') + ' ' + (r[C.operator] || '') + ' ' + (r[C.city] || '') + ' ' + (r[C.other_names] || '') + ' ' + r[C.id] + ' ' + (r[C.site] || '')).toLowerCase();
@@ -423,6 +444,9 @@ function boot(D) {
   const countryName = code => (window.__cname && window.__cname[code]) || code;
   fillSelect('f-role', D.roles); fillSelect('f-type', D.types); fillSelect('f-status', D.statuses);
   fillSelect('f-disc', D.discs); fillSelect('f-prec', D.precs);
+  document.getElementById('f-cmp').innerHTML = '<option value="">All</option>' + cmpOptions.map(([k, l]) => `<option value="${k}">${l}</option>`).join('');
+  document.getElementById('f-cmp').addEventListener('change', e => { state.cmp = e.target.value || null; applyFilters(); });
+  function setCmp(key) { state.cmp = state.cmp === key ? null : key; document.getElementById('f-cmp').value = state.cmp || ''; applyFilters(); }
   function fillCountries() {
     const counts = new Map(); rows.forEach(r => counts.set(r[C.country], (counts.get(r[C.country]) || 0) + 1));
     const order = D.countries.map((c, i) => i).sort((a, b) => countryName(D.countries[a]).localeCompare(countryName(D.countries[b])));
@@ -436,7 +460,7 @@ function boot(D) {
   let qt; document.getElementById('q').addEventListener('input', e => { clearTimeout(qt); qt = setTimeout(() => { state.q = e.target.value.trim().toLowerCase(); applyFilters(); }, 180); });
   document.getElementById('clear').addEventListener('click', () => {
     Object.keys(dims).forEach(k => { state[k] = null; document.getElementById(dims[k]).value = ''; });
-    state.q = ''; state.year = null; document.getElementById('q').value = ''; applyFilters();
+    state.q = ''; state.year = null; state.cmp = null; document.getElementById('f-cmp').value = ''; document.getElementById('q').value = ''; applyFilters();
   });
   function setFilter(dim, val) { state[dim] = (state[dim] === val) ? null : val; if (dims[dim]) document.getElementById(dims[dim]).value = state[dim] === null ? '' : state[dim]; applyFilters(); }
   ['role', 'status', 'family'].forEach(m => document.getElementById('cb-' + m).addEventListener('click', () => {
@@ -449,11 +473,12 @@ function boot(D) {
     const lab = { role: ['Role', D.roles], type: ['Type', D.types], status: ['Status', D.statuses], country: ['Country', D.countries.map(countryName)], disc: ['Found by', D.discs], prec: ['Location', D.precs] };
     Object.keys(lab).forEach(k => { if (state[k] !== null) parts.push(`<span class="chip"><b>${lab[k][0]}</b> ${lab[k][1][state[k]]} <button data-dim="${k}" aria-label="Remove filter">×</button></span>`); });
     if (state.year !== null) parts.push(`<span class="chip"><b>Start</b> ${state.year} <button data-dim="year" aria-label="Remove filter">×</button></span>`);
+    if (state.cmp !== null) parts.push(`<span class="chip"><b>Fields</b> ${cmpLabel[state.cmp]} <button data-dim="cmp" aria-label="Remove filter">×</button></span>`);
     if (state.q) parts.push(`<span class="chip"><b>Search</b> “${state.q}” <button data-dim="q" aria-label="Remove filter">×</button></span>`);
     el.innerHTML = parts.length ? `<span>${fmt(filtered.length)} of ${fmt(N)} facilities</span>` + parts.join('') : '';
     el.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
-      const d = b.dataset.dim; if (d === 'q') { state.q = ''; document.getElementById('q').value = ''; } else if (d === 'year') state.year = null; else setFilter(d, state[d]);
-      if (d === 'q' || d === 'year') applyFilters();
+      const d = b.dataset.dim; if (d === 'q') { state.q = ''; document.getElementById('q').value = ''; } else if (d === 'year') state.year = null; else if (d === 'cmp') { state.cmp = null; document.getElementById('f-cmp').value = ''; } else setFilter(d, state[d]);
+      if (d === 'q' || d === 'year' || d === 'cmp') applyFilters();
     }));
   }
 
@@ -535,7 +560,11 @@ function boot(D) {
       [0, 5, 15, 25, 35, 37].map(i => `<text x="${(pl + i * bw + bw / 2).toFixed(1)}" y="${H - 5}" text-anchor="middle">${bins[i] === '<2000' ? '<2000' : bins[i] === '>2035' ? '>2035' : bins[i]}</text>`).join('') +
       `</svg></section>`;
 
-    document.getElementById('stats').innerHTML = tiles + capTable +
+    const covItems = fieldTests.map(([k, l, fn]) => ({ label: l, n: filtered.filter(fn).length, key: 'has:' + k, dim: 'cmp', on: state.cmp === 'has:' + k }));
+    const nAll8 = filtered.filter(r => cmpMatch(r, 'all8')).length, nCore = filtered.filter(r => cmpMatch(r, 'core7')).length;
+    covItems.push({ label: 'Core fields (all but year)', n: nCore, key: 'core7', dim: 'cmp', on: state.cmp === 'core7' }, { label: 'All 8 key fields', n: nAll8, key: 'all8', dim: 'cmp', on: state.cmp === 'all8' });
+    const coverage = barList('Field coverage', covItems, { total: T, note: 'click to keep only rows with that field' });
+    document.getElementById('stats').innerHTML = tiles + coverage + capTable +
       barList('Status', statusItems, { total: T }) +
       barList('Hydrogen role', roleItems, { total: T }) +
       barList('Facility type', typeItems, { total: T }) +
@@ -544,10 +573,10 @@ function boot(D) {
       barList('Discovered by', discItems, { total: T, note: 'crawl vs reference DBs' }) +
       barList('Location precision', precItems, { total: T, note: '∅ = no coordinates' }) +
       barList('In reference databases', [...refc.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => ({ label: refLabel[k] || k, n, key: '', dim: '' })), { total: T, note: 'facilities matched to each DB' }) +
-      `<div class="foot"><p>Counts are recomputed from facilities_final.csv for the current selection. Point color: ${mode.label.toLowerCase()}. Solid dots have site/address-level or IEA/reference coordinates; hollow dots are geocoded to a city or region centroid.</p><p>Country shading uses every facility assigned to that country, including the ones without coordinates.</p></div>`;
+      `<div class="foot"><p>Counts are recomputed from facilities_final.csv for the current selection. Point color: ${mode.label.toLowerCase()}. Solid dots have site/address-level or IEA/reference coordinates; hollow dots are geocoded to a city or region centroid.</p><p>Country shading uses every facility assigned to that country, including the ones without coordinates.</p><p>“All 8 key fields” = hydrogen role, facility type other than “other”, operator, country, coordinates, a status other than unknown, start year, and a capacity in t/yr or MW.</p></div>`;
 
     document.getElementById('inc-agg').addEventListener('change', e => { state.incAgg = e.target.checked; renderStats(); });
-    document.querySelectorAll('#stats .bar').forEach(b => b.addEventListener('click', () => { if (b.dataset.dim) setFilter(b.dataset.dim, +b.dataset.key); }));
+    document.querySelectorAll('#stats .bar').forEach(b => b.addEventListener('click', () => { if (b.dataset.dim === 'cmp') setCmp(b.dataset.key); else if (b.dataset.dim) setFilter(b.dataset.dim, +b.dataset.key); }));
     document.querySelectorAll('#stats .hist rect').forEach(r => r.addEventListener('click', () => { state.year = state.year === r.dataset.year ? null : r.dataset.year; applyFilters(); }));
   }
 
